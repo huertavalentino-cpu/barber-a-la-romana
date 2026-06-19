@@ -2312,30 +2312,65 @@ async function generarFirmaFlow(params) {
 
 async function pagarConFlow(reservaData) {
   const {id, nombre, tel, servicio, fecha, hora, total} = reservaData;
-  const email = document.getElementById('res-email')?.value.trim() || tel+'@flowpago.cl';
+  const email = document.getElementById('res-email')?.value.trim();
+
+  if(!email) {
+    showToast('Ingresa tu email para pagar con Flow');
+    document.getElementById('res-email').focus();
+    return;
+  }
 
   localStorage.setItem('reserva_pendiente', JSON.stringify(reservaData));
-  showToast('Procesando pago con Flow...');
+  showToast('Conectando con Flow...');
+
+  const FLOW_API_KEY = '3E0F39DF-2F1C-4243-8B34-338L45035136';
+  const FLOW_SECRET = '90ac9abf0ffc89967897e64ec1fa31fa8bc20336';
+  const WEB_URL = window.location.origin;
+
+  // Generar firma HMAC-SHA256 usando SubtleCrypto (nativo del browser)
+  async function firmarFlow(params) {
+    const keys = Object.keys(params).sort();
+    let toSign = '';
+    keys.forEach(k => toSign += k + params[k]);
+    const encoder = new TextEncoder();
+    const keyData = encoder.encode(FLOW_SECRET);
+    const msgData = encoder.encode(toSign);
+    const cryptoKey = await crypto.subtle.importKey('raw', keyData, {name:'HMAC',hash:'SHA-256'}, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', cryptoKey, msgData);
+    return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
 
   try {
-    const resp = await fetch('/.netlify/functions/flow-create', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        codigo: id,
-        nombre,
-        email,
-        servicio,
-        total: total || 10000
-      })
+    const params = {
+      apiKey: FLOW_API_KEY,
+      commerceOrder: id,
+      subject: `Reserva Barberia La Romana - ${servicio}`,
+      currency: 'CLP',
+      amount: String(Math.round(total || 10000)),
+      email: email,
+      paymentMethod: '9',
+      urlConfirmation: WEB_URL+'/flow-confirm',
+      urlReturn: WEB_URL+'/?flow_return=1&orden='+id,
+    };
+
+    params.s = await firmarFlow(params);
+
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = 'https://www.flow.cl/app/web/create.php';
+    form.style.display = 'none';
+
+    Object.keys(params).forEach(k => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = k;
+      input.value = params[k];
+      form.appendChild(input);
     });
-    const data = await resp.json();
-    if(data.url) {
-      window.location.href = data.url;
-    } else {
-      showToast('Error al conectar con Flow. Intenta con otro método.');
-      console.error('Flow error:', data);
-    }
+
+    document.body.appendChild(form);
+    form.submit();
+
   } catch(err) {
     showToast('Error al conectar con Flow. Intenta con otro método.');
     console.error(err);
